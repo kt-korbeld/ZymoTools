@@ -1,0 +1,81 @@
+add_tb_termini_distance_loss() gains an order='binder-target'|'target-binder'
+parameter selecting which pair of termini the loss pulls together, matching
+binder_pipeline's fuse --order convention. Default 'binder-target' preserves
+the previous hardcoded behaviour (target N-terminus <-> binder C-terminus).
+---
+ functions/colabdesign_utils.py | 52 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/functions/colabdesign_utils.py b/functions/colabdesign_utils.py
+index 060d332..313d925 100644
+--- a/functions/colabdesign_utils.py
++++ b/functions/colabdesign_utils.py
+@@ -62,6 +62,11 @@ def binder_hallucination(design_name, starting_pdb, chain, target_hotspot_residu
+         # termini distance loss
+         add_termini_distance_loss(af_model, advanced_settings["weights_termini_loss"])
+ 
++    if advanced_settings["use_termini_distance_loss-TB"]:
++        # termini between Target and Binder
++        add_tb_termini_distance_loss(af_model, advanced_settings["weights_teminiTB_loss"],
++                                    order=advanced_settings["termini_loss_order-TB"])
++
+     # add the helicity loss
+     add_helix_loss(af_model, helicity_value)
+ 
+@@ -453,6 +458,53 @@ def add_termini_distance_loss(self, weight=0.1, threshold_distance=7.0):
+     self._callbacks["model"]["loss"].append(loss_fn)
+     self.opt["weights"]["NC"] = weight
+ 
++def add_tb_termini_distance_loss(self, weight=0.1, threshold_distance=30, order="binder-target"):
++    '''Add loss penalizing the distance between the target and binder termini that a
++    fusion linker will eventually join. `order` names the intended single-chain fusion
++    order (matching binder_pipeline's `fuse --order`):
++      - "binder-target": binder first, target second -> pulls the binder's C-terminus
++        toward the target's N-terminus.
++      - "target-binder": target first, binder second -> pulls the target's C-terminus
++        toward the binder's N-terminus.
++    '''
++    if order not in ("binder-target", "target-binder"):
++        raise ValueError(
++            "add_tb_termini_distance_loss: order must be 'binder-target' or "
++            "'target-binder', got {!r}".format(order))
++
++    def loss_fn(inputs, outputs):
++        xyz = outputs["structure_module"]
++        ca = xyz["final_atom_positions"][:, residue_constants.atom_order["CA"]]
++        ca_t = ca[:-self._binder_len]  # Considering only the target before _binder_len residues
++        ca_b = ca[-self._binder_len:]  # Considering only the last _binder_len residues
++
++        # Extract N-terminus (first CA atom) and C-terminus (last CA atom) of target
++        n_terminus_t = ca_t[0]
++        c_terminus_t = ca_t[-1]
++        # Extract N-terminus (first CA atom) and C-terminus (last CA atom) of binder
++        n_terminus_b = ca_b[0]
++        c_terminus_b = ca_b[-1]
++
++        # Pick the pair of termini that the fusion linker of `order` would join
++        if order == "binder-target":
++            joined_a, joined_b = c_terminus_b, n_terminus_t
++        else:
++            joined_a, joined_b = c_terminus_t, n_terminus_b
++
++        # Compute the distance between the joined termini
++        termini_distance = jnp.linalg.norm(joined_a - joined_b)
++
++        # Compute the deviation from the threshold distance using ELU activation
++        deviation = jax.nn.elu(termini_distance - threshold_distance)
++
++        # Ensure the loss is never lower than 0
++        termini_distance_loss = jax.nn.relu(deviation)
++        return {"NC-TB": termini_distance_loss}
++
++    # Append the loss function to the model callbacks
++    self._callbacks["model"]["loss"].append(loss_fn)
++    self.opt["weights"]["NC-TB"] = weight
++
+ # plot design trajectory losses
+ def plot_trajectory(af_model, design_name, design_paths):
+     metrics_to_plot = ['loss', 'plddt', 'ptm', 'i_ptm', 'con', 'i_con', 'pae', 'i_pae', 'rg', 'mpnn']
+-- 
+2.32.1 (Apple Git-133)
+

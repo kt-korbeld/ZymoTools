@@ -1,0 +1,2 @@
+[console_scripts]
+zymotools = zymotools.cli:main

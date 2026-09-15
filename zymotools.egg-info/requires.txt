@@ -1,0 +1,16 @@
+numpy
+pandas
+MDAnalysis
+biopython
+scipy
+pyyaml
+
+[all]
+shiny
+pydisgro
+
+[fuse]
+pydisgro
+
+[viewer]
+shiny

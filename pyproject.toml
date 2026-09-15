@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zymotools"
+description = "Hotspot screening for binder design with BindCraft, BoltzGen or RFdiffusion3"
+readme = "README.md"
+requires-python = ">=3.9"
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "pandas",
+    "MDAnalysis",
+    "biopython",
+    "scipy",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+# Only the two Shiny viewers need this, and a cluster install never runs them.
+viewer = ["shiny"]
+# Only the fuse command needs this, and only to build a linker
+fuse = ["pydisgro"]
+# install all for complete install
+all = ["shiny","pydisgro",]
+
+[project.scripts]
+zymotools = "zymotools.cli:main"
+
+[tool.setuptools]
+# ``foundry_shim.py`` must land on disk as an importable/runnable file: the RFD3
+# driver executes it by absolute path with *foundry's* interpreter, which has no
+# reason to have this package installed. A zipped install would break that.
+zip-safe = false
+
+[tool.setuptools.packages.find]
+include = ["zymotools*"]
+
+[tool.setuptools.package-data]
+# the bindcraft-patching command ships its diff as data, not code.
+binder_pipeline = ["patches/*.patch"]
+
+[tool.setuptools.dynamic]
+version = { attr = "zymotools.__version__" }
