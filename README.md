@@ -1,8 +1,8 @@
 ## Overview
-A suite of tools for generating Zymogen designs using BindCraft, BoltzGen or
+A suite of tools for generating de novo zymogen or prozyme designs using BindCraft, BoltzGen or
 RFdiffusion3. It takes a target structure, proposes hotspot patches for binder
-design, lets you curate them, runs a self-managing hotspot screen on SLURM, and
-sizes a fusion linker for the designs you keep, and finally fuses the designs with a linker.
+design to cover an active site, lets you curate them, runs a self-managing hotspot screen on SLURM, and
+sizes a fusion linker for the designs you keep, and finally fuses the designs with a linker to create the final artificial zymogens.
 
 ```
 structure ─► hotspots  ─►  screen  ─► linker ─► fuse
