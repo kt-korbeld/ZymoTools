@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# other unneccesary local stuff
+.DS_Store
+.ipynb_checkpoints/
