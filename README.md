@@ -38,7 +38,7 @@ Or can be run without proper installation run using:
 python run_zymotools.py <command> [options]
 ```
 The latter option allows for a more modular deployment, as not all commands require the same dependencies.
-especially the `rfd3-job` and `screen` commands can often be run without requiring a separate environment:
+especially the `rfd3-job` and `screen` commands can be run without most of the dependencies:
 
 ```
 hotspots      numpy, pandas, pyyaml, Biopython, MDAnalysis
