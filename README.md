@@ -1,8 +1,8 @@
 ## Overview
-A suite of tools for generating Zymogen designs using BindCraft, BoltzGen or
+A suite of tools for generating de novo zymogen or prozyme designs using BindCraft, BoltzGen or
 RFdiffusion3. It takes a target structure, proposes hotspot patches for binder
-design, lets you curate them, runs a self-managing hotspot screen on SLURM, and
-sizes a fusion linker for the designs you keep, and finally fuses the designs with a linker.
+design to cover an active site, lets you curate them, runs a self-managing hotspot screen on SLURM, and
+sizes a fusion linker for the designs you keep, and finally fuses the designs with a linker to create the final artificial zymogens.
 
 ```
 structure ─► hotspots  ─►  screen  ─► linker ─► fuse
@@ -29,14 +29,14 @@ Add `-h` to any command for its full options.
 ## Installation
 The suite can be installed using pip:
 ```bash
-pip install .
-binder-pipeline <command> [options]
+pip install zymotools[all]
 ```
 Or can be run without proper installation run using: 
 ```bash
-python pipeline.py <command> [options]
+python run_zymotools.py <command> [options]
 ```
-The latter option allows for a more modular install, as not all commands require the same dependencies:
+The latter option allows for a more modular deployment, as not all commands require the same dependencies.
+especially the `rfd3-job` and `screen` commands can be run without most of the dependencies:
 
 ```
 hotspots      numpy, pandas, pyyaml, Biopython, MDAnalysis
@@ -50,7 +50,7 @@ run           numpy, pandas, scipy, pyyaml, Biopython, MDAnalysis, pyDisgro, Shi
 ```
 
 The suite assumes the BindCraft/BoltzGen/RFdiffusion3 backends are installed separately in an appropriate environment.
-For  RFdiffusion, the suite assumes the use of [foundry](https://github.com/RosettaCommons/foundry) 
+For RFdiffusion, the suite assumes the use of [foundry](https://github.com/RosettaCommons/foundry) 
 to install the RFD3/MPNN/RF3 models. For [BindCraft](github.com/martinpacesa/BindCraft), 
 [BindCraft2](https://github.com/PacesaLab/BindCraft2) and 
 [BoltzGen](https://github.com/HannesStark/boltzgen), the installation instructions on their 
@@ -71,7 +71,7 @@ These are listed under `-h` for each of the respective pipelines.
 
 a typical command to generate hotspots and their corresponding input files looks like:
 ```bash
-binder-pipeline hotspots --struc struc_1.pdb --pipeline bindcraft --chain A --outdir runs/hotspots
+zymotools hotspots --struc struc_1.pdb --pipeline bindcraft --chain A --outdir runs/hotspots
 ```
 `--pipeline` picks which backend the per-patch settings files are written for
 (`bindcraft`, `boltzgen` or `rfd3`). It also sets a default patch size: BindCraft prefers
@@ -92,7 +92,7 @@ The generated hotspots are ranked from best to worst. As a result, similar hotsp
 close together. This might be desirable, but to increase a diversity in sampling, a few diverse hotspots can be
 manually curated. To inspect the hotspots and select a desirable set, use:
 ```bash
-binder-pipeline view-hotspots
+zymotools view-hotspots
 ```
 This will open an interactive hotspot viewer in your local browser. This therefore should not be run on an 
 HPC cluster without access to a browser. Select the patch rows you want and "Download selected rows as CSV". 
@@ -110,7 +110,7 @@ screen rfd3
 ```
 The required input parameters will vary between backends. For BindCraft, this will look like:
 ```bash
-binder-pipeline screen bindcraft --inputs runs/struc_1/inputs-out.txt --bindcraft /scratch/user/bindcraft
+zymotools screen bindcraft --inputs runs/struc_1/inputs-out.txt --bindcraft /scratch/user/bindcraft
 ```
 When using the `bindcraft` pipeline, the `--bindcraft` flag specifies the folder where bindcraft is installed. 
 options for most input files, such as `--slurm-bc`, `--filters` and `--advanced` default to standard locations 
@@ -134,11 +134,11 @@ command have the following flags for binder design cutoffs during refolding:
 
 To check the progress of the current screen, run:
 ```bash
-binder-pipeline status --outdir runs/struc_1
+zymotools status --outdir runs/struc_1
 ```
 Any parameter can be named explicitly instead:
 ```bash
-binder-pipeline status --inputs inputs-out.txt --pipeline boltzgen --screen-outdir runs/9I8E/boltzgen-screen --budget 300
+zymotools status --inputs inputs-out.txt --pipeline boltzgen --screen-outdir runs/9I8E/boltzgen-screen --budget 300
 ```
 
 **4. Estimate linker size (optional)**
@@ -147,7 +147,7 @@ The required linker length can be estimated by calculating the shortest path aro
 This is done by creating a solvent grid around the protein and finding the shortest path using a Dijkstra search.
 A typical command to estimate the linker length is:
 ```bash
-python pipeline.py linker --struc design.pdb --chain-start A --start 108 --chain-end   B --end   1
+zymotools linker --struc design.pdb --chain-start A --start 108 --chain-end   B --end   1
 ```
 Reports the shortest path around the protein and the minimum linker length in residues.
 To visually inspect how this shortest path looks, a shiny 
