@@ -1,0 +1,55 @@
+termini_distance_tb() adds a target-binder termini distance loss to BindCraft2's
+loss registry, alongside the existing binder-only termini_distance loss and the
+existing com_distance loss it is modeled on. It pulls together whichever pair of
+termini a fusion linker of the given order would join, matching binder_pipeline's
+fuse --order convention (default 'binder-target': the binder's C-terminus and the
+target's N-terminus). Registering it via @loss(...) is sufficient for BC2 to accept
+weights_termini_distance_tb as a campaign setting; no other file needs changing.
+---
+ bindcraft/loss.py | 34 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 33 insertions(+), 1 deletion(-)
+
+--- a/bindcraft/loss.py
++++ b/bindcraft/loss.py
+@@ -464,7 +464,41 @@
+     binder_radius = jnp.sqrt(_masked_mean(jnp.square(binder_coordinates - binder_centroid).sum(-1), binder_mask) + eps)
+     centroid_distance = jnp.linalg.norm(binder_centroid - masked_coordinate_centroid(target_coordinates, target_mask))
+     return jax.nn.relu(centroid_distance - radius_ratio * binder_radius)
++
++@loss('termini_distance_tb', target_weighting='every_target')
++def termini_distance_tb_loss(protein_states: ProteinStates, predictions: StructurePredictions, prediction_state: str='complex', binder: str='binder', target: str='target', order: str='binder-target', threshold_distance: float=30.0) -> Array:
++    '''Distance between the pair of termini a fusion linker of the given `order`
++    would join: for "binder-target", the binder's C-terminus and the target's
++    N-terminus; for "target-binder", the target's C-terminus and the binder's
++    N-terminus. Companion to BC2's own `termini_distance` (which brings a
++    binder's own two ends together) -- this one addresses a binder terminus to
++    a target terminus instead, for a planned single-chain fusion construct.'''
++    if order not in ('binder-target', 'target-binder'):
++        raise ValueError("termini_distance_tb: order must be 'binder-target' or 'target-binder', got {!r}".format(order))
++    prediction_state = resolve_prediction_state(predictions, prediction_state)
++    target = resolve_target_chain(protein_states[prediction_state], target, prediction_state)
++    protein_complex = predictions[prediction_state].protein_complex
++    binder_coordinates, binder_mask = chain_atom_coordinates(protein_complex[binder])
++    target_coordinates, target_mask = chain_atom_coordinates(protein_complex[target])
++    binder_c_index = real_residue_count(protein_states[prediction_state][binder].flags) - 1
++    target_c_index = real_residue_count(protein_states[prediction_state][target].flags) - 1
++
++    binder_n, binder_n_mask = binder_coordinates[0], binder_mask[0]
++    binder_c, binder_c_mask = binder_coordinates[binder_c_index], binder_mask[binder_c_index]
++    target_n, target_n_mask = target_coordinates[0], target_mask[0]
++    target_c, target_c_mask = target_coordinates[target_c_index], target_mask[target_c_index]
++
++    # the pair of termini a fusion linker of `order` would join
++    if order == 'binder-target':
++        joined_a, joined_a_mask = binder_c, binder_c_mask
++        joined_b, joined_b_mask = target_n, target_n_mask
++    else:
++        joined_a, joined_a_mask = target_c, target_c_mask
++        joined_b, joined_b_mask = binder_n, binder_n_mask
+ 
++    distance = jnp.sqrt(jnp.square(joined_a - joined_b).sum() + 1e-08)
++    return jax.nn.relu(distance - threshold_distance) * joined_a_mask * joined_b_mask
++
+ @loss('binder_coldspot', target_weighting='every_target')
+ def binder_coldspot_loss(protein_states: ProteinStates, predictions: StructurePredictions, prediction_state: str='complex', binder: str='binder', target: str='target', cutoff: float=8.0, contacts_per_residue: int=1, designed_only: bool=True) -> Array:
+     prediction_state = resolve_prediction_state(predictions, prediction_state)

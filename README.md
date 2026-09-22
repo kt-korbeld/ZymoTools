@@ -14,9 +14,7 @@ These steps are integrated in the following command-line tools:
 ```
 hotspots           Find patches, write `patch_summaries.csv`, and generate input files for the selected backend.
 rfd3-job           One integrated RFdiffusion3 design round. Called by screen rfd3.
-screen bindcraft   Run/continue the self-resubmitting SLURM screen for BindCraft.
-screen boltzgen    Run/continue the self-resubmitting SLURM screen for BoltzGen.
-screen rfd3        Run/continue the self-resubmitting SLURM screen for RFdiffusion3.
+screen             Run/continue the self-resubmitting SLURM screen for each of the supported backends. 
 status             Report progress per input for any of the three backends.
 linker             Shortest-solvent-path fusion-linker length between two residues.
 fuse               Fuse directory of binder-target structures into one chain and construct linker
@@ -53,10 +51,11 @@ run           numpy, pandas, scipy, pyyaml, Biopython, MDAnalysis, pyDisgro, Shi
 
 The suite assumes the BindCraft/BoltzGen/RFdiffusion3 backends are installed separately in an appropriate environment.
 For  RFdiffusion, the suite assumes the use of [foundry](https://github.com/RosettaCommons/foundry) 
-to install the RFD3/MPNN/RF3 models. For [BindCraft](github.com/martinpacesa/BindCraft), and 
+to install the RFD3/MPNN/RF3 models. For [BindCraft](github.com/martinpacesa/BindCraft), 
+[BindCraft2](https://github.com/PacesaLab/BindCraft2) and 
 [BoltzGen](https://github.com/HannesStark/boltzgen), the installation instructions on their 
 respective github pages should be followed. Running the `patch-bindcraft` command implements a 
-patch that adds a loss function to BindCraft to force the target-binder termini closer.
+patch that adds a loss function to either BindCraft or BindCraft2 to force the target-binder termini closer.
 This command assumes access to the UNIX `patch` command. 
 
 The SLURM screening phase can run for days, so the `screen` command resubmits itself. For this,
@@ -101,7 +100,15 @@ You can trim `jsons-out.txt` to just the patches you intend to run.
 
 **3. Screen hotspots**
 
-A typical command to screen the hotspots will vary between backends. For BindCraft, this will look like:
+The `screen` command (re)-sumbits binder calculations for the generated hotspots. 
+It contains 4 subcommands for each of the supported backends:
+```
+screen bindcraft
+screen bindcraft2
+screen boltzgen
+screen rfd3
+```
+The required input parameters will vary between backends. For BindCraft, this will look like:
 ```bash
 binder-pipeline screen bindcraft --inputs runs/struc_1/inputs-out.txt --bindcraft /scratch/user/bindcraft
 ```
@@ -171,8 +178,8 @@ The output are s one construct per design plus a `fusion_report.csv` reporting e
   and missing residues added. The structure should match whatever will be expressed experimentally:
   if terminal residues are left out there, they should be left out during the design process.
 - The current pipeline has only been verified and tested experimentally for BindCraft. 
-  BoltzGen and RFD3 pipelines have not been extensively run or experimentally tested so particular
-  cutoffs and settings might not be well optimized. Especially for RFD3, the used cutoffs are
+  BindCraft 2, BoltzGen and RFD3 pipelines have not been extensively run or experimentally tested so particular
+  settings might not be well optimized. Especially for RFD3, the used cutoffs are
   tentative, and might need to be changed or adjusted accordingy.
 - The foundry API for MPNN and RF3 are unstable, and its RF3 CLI is undocumented.
   Some of the default scripts in rfd3_io might need to be changed if this API is updated.

@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from .rfd3_io import validate_settings, load_settings, contig_binder_lengths
-from .util import env_python
+from .util import MAX_STALL_CYCLES, check_stalled, env_python, stall_state_path
 from .structure import read_ca_coords, read_chain_sequence, kabsch_rmsd
 
 # --------------------------------------------------------------------------
@@ -26,6 +26,8 @@ from .structure import read_ca_coords, read_chain_sequence, kabsch_rmsd
 
 # RFD3 reassigns chainID, so binder should always be A. this is verified by check_binder_chain
 BINDER_CHAIN = "A"
+# ...and the target (known structure) is always the other chain of the pair.
+TARGET_CHAIN = "B"
 # glob name of the outputs from the parallel jobs
 METRICS_GLOB = "metrics_*.csv"
 # output name of the combined jobs
@@ -49,15 +51,8 @@ USE_SHIM = None
 OFF_VALUES = ("0", "off", "no", "false", "none")
 FOUNDRY_LOG = None
 
-# Each job's designs are named after its prefix, which must be unique per *round*
-# as well as per parallel job. RFdiffusion3 defaults to ``skip_existing``, so a
-# second round submitted under the same prefix regenerates example IDs that already
-# exist, skips every one of them ("No design specifications to run"), and produces
-# no new backbones -- the attempt count never grows, and the controller resubmits
-# that hotspot forever without advancing. Folding in the SLURM job ID fixes that
-# while keeping what ``skip_existing`` is actually for: a job SLURM *requeues*
-# keeps its job ID, so it resumes instead of restarting from scratch.
-# Expanded by the job script's shell, not here.
+# Each job's requires a unique prefix to avoid RFD3 skipping designs for existing ids
+# this is the template used to generate/set those unique ids
 JOB_PREFIX_TEMPLATE = "job{}_${{SLURM_JOB_ID:-manual}}_"
 
 
@@ -91,6 +86,16 @@ def get_progress(final_design_path, trajectory_path, verbose=False):
     return traj, des
 
 
+def progress_paths(output_path):
+    """
+    ``(final_design_path, trajectory_path)`` RFD3 writes for one input. One
+    definition, so the finish check, the status report, and the resubmit-loop
+    circuit breaker cannot disagree about where the numbers live.
+    """
+    output_path = Path(output_path)
+    return output_path / FINAL_DESIGNS_CSV, output_path / ALL_DESIGNS_CSV
+
+
 def check_if_finished(output_path, max_des, min_ratio=0.01, min_traj=300, verbose=True):
     """
     Check whether an input has been screened sufficiently based on if:
@@ -99,8 +104,7 @@ def check_if_finished(output_path, max_des, min_ratio=0.01, min_traj=300, verbos
     Returns True if sufficiently run, and False if it requires more runs
     """
     # get paths of neccesary output files
-    final_design_path = Path(output_path) / FINAL_DESIGNS_CSV
-    trajectory_path = Path(output_path) / ALL_DESIGNS_CSV
+    final_design_path, trajectory_path = progress_paths(output_path)
     # if nothing has run yet, it is not finished, re-submit.
     if not (os.path.exists(final_design_path) and os.path.exists(trajectory_path)):
         return False
@@ -263,6 +267,17 @@ def run_screen(inputs_file, slurm_rfd3, outdir_root, resubmit_cmd, budget=300,
         if check_if_finished(outdir, budget, min_ratio=min_ratio, min_traj=min_traj):
             print("  {} has been run sufficiently".format(input_yaml))
             continue
+        # Give up on the whole screen once an input's trajectory count has not
+        # moved for several cycles in a row: see bindcraft_slurm.run_screen for
+        # why this stops the whole screen rather than just this one input.
+        traj_nr, _ = get_progress(*progress_paths(outdir), verbose=False)
+        if check_stalled(outdir, traj_nr):
+            print("  no new trajectories after {} resubmissions; stopping the "
+                  "whole screen (no further controller scheduled) to avoid an "
+                  "unbounded resubmit loop. Check this input's job logs for "
+                  "the underlying failure, fix it, then delete {} and rerun "
+                  "screen to resume.".format(MAX_STALL_CYCLES, stall_state_path(outdir)))
+            return True
         # submit new jobs if not finished
         print("  submitting {} jobs for {}".format(nr_jobs, input_yaml))
         jids = submit_sbatch(input_yaml, slurm_rfd3, outdir, nr_jobs)
@@ -293,7 +308,7 @@ def status_report(inputs_file, outdir_root, budget=None, min_ratio=0.01, min_tra
             rows.append(row)
             continue
         outdir = outdir_for_input(input_yaml, outdir_root)
-        traj, des = get_progress(outdir / FINAL_DESIGNS_CSV, outdir / ALL_DESIGNS_CSV)
+        traj, des = get_progress(*progress_paths(outdir))
         finished = check_if_finished(outdir, budget, min_ratio=min_ratio,
                                      min_traj=min_traj, verbose=False)
         row.update({
@@ -530,18 +545,29 @@ def parse_mpnn_fasta(fasta, mpnn_dir):
     return designs
 
 
-def run_rf3_batch(structures_dir, rf3_dir, diffusion_batch_size=1):
+def run_rf3_batch(structures_dir, rf3_dir, diffusion_batch_size=1, template_target=True):
     """
     Refold every design in structures_dir with a single rf3 fold call.
     diffusion_batch_size is 1 by default
     because RF3 otherwise samples 5 structures per input
     and ranks them, five times the cost for a number we then threshold anyway.
+
+    template_target (default True) passes RF3's own ``template_selection``
+    override for the whole target chain (TARGET_CHAIN, "B"), so RF3 conditions
+    on the target's known structure via a distogram template while the binder
+    chain (A) still folds unconstrained. This is the same target-templated,
+    binder-free convention as foundry's own binder-design example
+    (docs/examples/*_template_antigen_and_framework.json in the rf3 model).
+    Selection syntax and behaviour: rf3.utils.inference.apply_template_selection
+    / rf3.data.ground_truth_template (the "is_input_file_templated" annotation).
     """
     rf3_dir.mkdir(parents=True, exist_ok=True)
     cmd = foundry_cmd("rf3", "fold",
                       "inputs={}".format(Path(structures_dir).resolve()),
                       "out_dir={}".format(rf3_dir.resolve()),
                       "diffusion_batch_size={}".format(int(diffusion_batch_size)))
+    if template_target:
+        cmd.append("template_selection=[{}]".format(TARGET_CHAIN))
     return run_cmd(cmd, "rf3")
 
 
@@ -568,27 +594,11 @@ def parse_rf3_confidences(out_dir, binder_chain_index=0, conf_fields=CONF_FIELDS
     """
     Pull RF3's confidence numbers out of the summary JSON it wrote as a dict
     RF3 reports plddt on a 0-1 scale so pLDDT is rescaled
-
-    Three of these describe the design; two describe the target it is docked to:
-
-    - ``binder_plddt`` -- RF3's ``chain_ptm`` list holds per-chain **pLDDT**, not
-      pTM (the key is mislabelled upstream: it is built from ``chain_plddt``).
-      Element 0 is the binder, which RFdiffusion3 emits as the first chain.
-    - ``interface_pae_min`` -- the *best* binder-target PAE, from
-      ``chain_pair_pae_min``. This is the one that discriminates. Over the eight
-      designs of the validation run it read 2.1 for the one design ipTM liked
-      (0.73), 9.4 for the next (0.38), and 17-22 for the six ipTM rejected.
-    - ``interface_pae`` -- the *mean* binder-target PAE, from the off-diagonal of
-      ``chain_pair_pae``. Recorded for context, but it spans only 21.9-25.7 across
-      those same eight designs, good and bad alike, so it cannot separate them.
-      BoltzGen reaches the same conclusion: it ranks on
-      ``min_design_to_target_pae``, not on a mean.
-    - ``iptm`` -- already interface-only by construction.
-
-    ``plddt`` and ``pae`` average over the whole complex, so both are dominated by
-    the target: a constant property of the target, not of the design. They are
-    recorded for context but do not gate anything, matching how BindCraft and
-    BoltzGen judge a refold on the design chain and its interface only.
+    (binder_plddt) is extracted from RF3's chain_ptm which list holds per-chain pLDDT, 
+    not pTM. (interface_pae_min) is the best binder-target PAE, from (chain_pair_pae_min)
+    (interface_pae) is the mean binder-target PAE, from the off-diagonal of(chain_pair_pae)
+    Recorded for context, but not used. (iptm) is already interface-only by construction.
+    (plddt) and (pae) are average over the whole complex and currently not used. 
     """
     
     keys = {"iptm": ("iptm",), "plddt": ("overall_plddt", "plddt"), "pae": ("overall_pae", "pae")}
@@ -656,20 +666,8 @@ def _mean_interface_pae(matrix):
 def passes_filters(conf, rmsd, min_iptm=0.8, min_plddt=80.0, max_ipae=10.0,
                    max_rmsd=2.0):
     """
-    Whether one refolded design passes, given its ``parse_rf3_confidences`` dict.
-
-    Only metrics that describe the binder against its target are used: ipTM and the
-    *minimum* interface PAE for the interface, pLDDT of the binder chain for the
-    fold. The mean interface PAE is recorded but not gated -- it hardly moves
-    between a good design and a bad one (see parse_rf3_confidences). The
-    whole-complex ``plddt``/``pae`` columns are ignored on purpose -- a 250-residue
-    target folded without an MSA sets both, so thresholding them scores the target
-    rather than the design. BindCraft and BoltzGen filter their refolds the same
-    way (BoltzGen ranks on ``design_to_target_iptm``, ``min_design_to_target_pae``
-    and ``design_ptm``).
-
-    A metric that could not be measured is treated as a failure, so a broken
-    prediction step cannot silently inflate the success ratio.
+    Whether one refolded design passes, given its parse_rf3_confidences dict.
+    only checks iptm, binder_plddt and interface_pae_min. 
     """
     thresholds = [(conf.get("iptm"), min_iptm, False),
                   (conf.get("binder_plddt"), min_plddt, False),

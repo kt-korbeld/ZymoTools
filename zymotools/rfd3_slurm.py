@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from .rfd3_io import validate_settings, load_settings, contig_binder_lengths
-from .util import env_python
+from .util import MAX_STALL_CYCLES, check_stalled, env_python, stall_state_path
 from .structure import read_ca_coords, read_chain_sequence, kabsch_rmsd
 
 # --------------------------------------------------------------------------
@@ -51,15 +51,8 @@ USE_SHIM = None
 OFF_VALUES = ("0", "off", "no", "false", "none")
 FOUNDRY_LOG = None
 
-# Each job's designs are named after its prefix, which must be unique per *round*
-# as well as per parallel job. RFdiffusion3 defaults to ``skip_existing``, so a
-# second round submitted under the same prefix regenerates example IDs that already
-# exist, skips every one of them ("No design specifications to run"), and produces
-# no new backbones -- the attempt count never grows, and the controller resubmits
-# that hotspot forever without advancing. Folding in the SLURM job ID fixes that
-# while keeping what ``skip_existing`` is actually for: a job SLURM *requeues*
-# keeps its job ID, so it resumes instead of restarting from scratch.
-# Expanded by the job script's shell, not here.
+# Each job's requires a unique prefix to avoid RFD3 skipping designs for existing ids
+# this is the template used to generate/set those unique ids
 JOB_PREFIX_TEMPLATE = "job{}_${{SLURM_JOB_ID:-manual}}_"
 
 
@@ -93,6 +86,16 @@ def get_progress(final_design_path, trajectory_path, verbose=False):
     return traj, des
 
 
+def progress_paths(output_path):
+    """
+    ``(final_design_path, trajectory_path)`` RFD3 writes for one input. One
+    definition, so the finish check, the status report, and the resubmit-loop
+    circuit breaker cannot disagree about where the numbers live.
+    """
+    output_path = Path(output_path)
+    return output_path / FINAL_DESIGNS_CSV, output_path / ALL_DESIGNS_CSV
+
+
 def check_if_finished(output_path, max_des, min_ratio=0.01, min_traj=300, verbose=True):
     """
     Check whether an input has been screened sufficiently based on if:
@@ -101,8 +104,7 @@ def check_if_finished(output_path, max_des, min_ratio=0.01, min_traj=300, verbos
     Returns True if sufficiently run, and False if it requires more runs
     """
     # get paths of neccesary output files
-    final_design_path = Path(output_path) / FINAL_DESIGNS_CSV
-    trajectory_path = Path(output_path) / ALL_DESIGNS_CSV
+    final_design_path, trajectory_path = progress_paths(output_path)
     # if nothing has run yet, it is not finished, re-submit.
     if not (os.path.exists(final_design_path) and os.path.exists(trajectory_path)):
         return False
@@ -265,6 +267,17 @@ def run_screen(inputs_file, slurm_rfd3, outdir_root, resubmit_cmd, budget=300,
         if check_if_finished(outdir, budget, min_ratio=min_ratio, min_traj=min_traj):
             print("  {} has been run sufficiently".format(input_yaml))
             continue
+        # Give up on the whole screen once an input's trajectory count has not
+        # moved for several cycles in a row: see bindcraft_slurm.run_screen for
+        # why this stops the whole screen rather than just this one input.
+        traj_nr, _ = get_progress(*progress_paths(outdir), verbose=False)
+        if check_stalled(outdir, traj_nr):
+            print("  no new trajectories after {} resubmissions; stopping the "
+                  "whole screen (no further controller scheduled) to avoid an "
+                  "unbounded resubmit loop. Check this input's job logs for "
+                  "the underlying failure, fix it, then delete {} and rerun "
+                  "screen to resume.".format(MAX_STALL_CYCLES, stall_state_path(outdir)))
+            return True
         # submit new jobs if not finished
         print("  submitting {} jobs for {}".format(nr_jobs, input_yaml))
         jids = submit_sbatch(input_yaml, slurm_rfd3, outdir, nr_jobs)
@@ -295,7 +308,7 @@ def status_report(inputs_file, outdir_root, budget=None, min_ratio=0.01, min_tra
             rows.append(row)
             continue
         outdir = outdir_for_input(input_yaml, outdir_root)
-        traj, des = get_progress(outdir / FINAL_DESIGNS_CSV, outdir / ALL_DESIGNS_CSV)
+        traj, des = get_progress(*progress_paths(outdir))
         finished = check_if_finished(outdir, budget, min_ratio=min_ratio,
                                      min_traj=min_traj, verbose=False)
         row.update({

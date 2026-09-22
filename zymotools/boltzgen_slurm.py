@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from .boltzgen_io import validate_settings
+from .util import MAX_STALL_CYCLES, check_stalled, stall_state_path
 
 def count_rows(csv_path):
     """
@@ -221,6 +222,17 @@ def run_screen(inputs_file, slurm_bg, output_path, resubmit_cmd, boltzgen_cmd,
         if check_if_finished(outdir, max_des, min_ratio=min_ratio, min_traj=min_traj):
             print("  {} has been run sufficiently".format(input_yaml))
             continue
+        # Give up on the whole screen once an input's trajectory count has not
+        # moved for several cycles in a row: see bindcraft_slurm.run_screen for
+        # why this stops the whole screen rather than just this one input.
+        traj_nr, _ = get_progress(*progress_paths(outdir, max_des), verbose=False)
+        if check_stalled(outdir, traj_nr):
+            print("  no new trajectories after {} resubmissions; stopping the "
+                  "whole screen (no further controller scheduled) to avoid an "
+                  "unbounded resubmit loop. Check this input's job logs for "
+                  "the underlying failure, fix it, then delete {} and rerun "
+                  "screen to resume.".format(MAX_STALL_CYCLES, stall_state_path(outdir)))
+            return True
         # submit new jobs if not finished
         print("  submitting {} jobs for {}".format(nr_jobs, input_yaml))
         jids = submit_sbatch(input_yaml, slurm_bg, outdir, nr_jobs)

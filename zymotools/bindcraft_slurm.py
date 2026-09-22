@@ -5,13 +5,13 @@ the screen adds a self-resubmitting script in order to rerun independently
 until conditions are met. get_progress() checks how far one patch has been run. 
 """
 
-
 import os
 import shlex
 import subprocess
 from pathlib import Path
 
 from .bindcraft_io import validate_settings
+from .util import MAX_STALL_CYCLES, check_stalled, stall_state_path
 
 
 def count_rows(csv_path):
@@ -53,17 +53,16 @@ def progress_paths(output_path):
             output_path / "trajectory_stats.csv")
 
 
-def check_if_finished(output_path, max_des, min_ratio=0.01, min_traj=300, verbose=True):
+def check_if_finished(final_design_path, trajectory_path, max_des, min_ratio=0.01, min_traj=300, verbose=True):
     """
     Check whether an input has been screened sufficiently based on if:
     min_traj (default: 300) designs exist with less than min_ratio (default: 0.01) sucess rate,
     or a sufficient number of final designs specified in the input .json has been reached.
-    uses data from .json input file to get the output directory and sufficient nr of final designs. 
+    Takes the two progress CSV paths directly (see ``progress_paths``) rather
+    than an output directory, so callers using a different output layout (see
+    ``bindcraft2_slurm.progress_paths``) can reuse this unchanged.
     Returns True if sufficiently run, and False if it requires more runs
     """
-
-    final_design_path, trajectory_path = progress_paths(output_path)
-    
     # if nothing has run yet, it is not finished, re-submit.
     if not (os.path.exists(final_design_path) and os.path.exists(trajectory_path)):
         return False
@@ -89,7 +88,7 @@ def check_if_finished(output_path, max_des, min_ratio=0.01, min_traj=300, verbos
 
 def submit_sbatch(input_json, slurm_bc, filters, advanced, nr_jobs):
     """
-    Submit ``nr_jobs`` BindCraft jobs for one input. Returns job IDs.
+    Submit nr_jobs number of BindCraft jobs for one input. Returns job IDs.
     """
     cmd = ["sbatch", str(slurm_bc),
            "--settings", str(input_json),
@@ -154,9 +153,17 @@ def run_screen(inputs_file, slurm_bc, filters, advanced, resubmit_cmd,
             print("  failed to parse: {}".format(e))
             continue
         # check if output exists and if the success ratio is high enough
-        if check_if_finished(output_path, max_des, min_ratio=min_ratio, min_traj=min_traj):
+        if check_if_finished(*progress_paths(output_path), max_des=max_des,
+                             min_ratio=min_ratio, min_traj=min_traj):
             print("  {} has been run sufficiently".format(input_json))
             continue
+        # prevent resubmission from looping in case of error
+        traj_nr, _ = get_progress(*progress_paths(output_path), verbose=False)
+        if check_stalled(output_path, traj_nr):
+            print("no new trajectories after {} resubmissions."
+                  "fix it, then delete {} and rerun screen to resume.".format(
+                      MAX_STALL_CYCLES, stall_state_path(output_path)))
+            return True  # stop scheduling; nothing more the screen should do on its own
         # submit new jobs if not finished
         print("  submitting {} jobs for {}".format(nr_jobs, input_json))
         jids = submit_sbatch(input_json, slurm_bc, filters, advanced, nr_jobs)
@@ -172,9 +179,7 @@ def status_report(inputs_file, outdir_root=None, budget=None,
                   min_ratio=0.01, min_traj=300):
     """
     Read-only progress for every input. Returns a list of per-input dicts.
-
-    ``outdir_root`` is accepted for signature parity with the other two backends
-    and ignored: BindCraft's settings JSON carries its own ``design_path``.
+    outdir_root is not used, but kept as an option for consistency with other backends.
     """
     rows = []
     for input_json in read_input_txt(inputs_file):
@@ -195,8 +200,8 @@ def status_report(inputs_file, outdir_root=None, budget=None,
         # design target in each settings JSON, so outdir_root is not needed here
         final_design_path, trajectory_path = progress_paths(output_path)
         traj, des = get_progress(final_design_path, trajectory_path)
-        finished = check_if_finished(output_path, max_des, min_ratio=min_ratio, min_traj=min_traj,
-                                     verbose=False)
+        finished = check_if_finished(final_design_path, trajectory_path, max_des,
+                                     min_ratio=min_ratio, min_traj=min_traj, verbose=False)
         row.update({
             "design_path": output_path,
             "trajectories": traj,

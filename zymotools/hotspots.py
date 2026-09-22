@@ -19,6 +19,7 @@ from .structure import iterate_sasa_trajectory
 
 # different default patch size settings depending on the pipeline used
 PATCH_DEFAULTS = {"bindcraft": {"depth": 3, "minsize": 6},
+                  "bindcraft2": {"depth": 3, "minsize": 6},
                   "boltzgen": {"depth": 1, "minsize": 2},
                   "rfd3": {"depth": 1, "minsize": 2},}
 
@@ -259,6 +260,8 @@ def generate_hotspots(struc, pipeline='bindcraft', template=None, target=None, s
     # load in correct function for patch generation depending on pipeline used
     if pipeline == "bindcraft":
         from .bindcraft_io import write_patch_settings
+    elif pipeline == "bindcraft2":
+        from .bindcraft2_io import write_patch_settings
     elif pipeline == "boltzgen":
         from .boltzgen_io import write_patch_settings
     elif pipeline == "rfd3":

@@ -26,10 +26,12 @@ from .config import PipelineState
 
 # Each backend for generating binders has its own slurm module
 STATUS_REPORTS = {"bindcraft": ".bindcraft_slurm",
+                  "bindcraft2": ".bindcraft2_slurm",
                   "boltzgen": ".boltzgen_slurm",
                   "rfd3": ".rfd3_slurm",}
 # The screen handler and flag for each backend
 SCREEN_COMMANDS = {"bindcraft": ("cmd_screen_bc", "bindcraft"),
+                   "bindcraft2": ("cmd_screen_bc2", "bindcraft2"),
                    "boltzgen": ("cmd_screen_bg", "boltzgen"),
                    "rfd3": ("cmd_screen_rfd3", "foundry"),}
 # --------------------------------------------------------------------------
@@ -64,18 +66,14 @@ def verify_launcher(cmd):
         raise SystemExit("cannot run the resubmit launcher: {}\n  {}".format(
             exc, shlex.join([str(c) for c in cmd])))
     # if it fails but does not cause an OSError, cmd does not work for other reasons.
-    # the launcher's own stderr says why; there is no exception here to report.
     if proc.returncode != 0:
-        raise SystemExit("the resubmit launcher does not work, so the screen would "
-            "stop after its first round:\n  {}\n{}\nInstall this package into that "
-            "interpreter's environment (pip install -e .), or run from the source "
-            "checkout.".format(shlex.join([str(c) for c in cmd] + ["--version"]),
-                               (proc.stderr or proc.stdout).strip()[:500]))
+        raise SystemExit("the resubmit launcher does not work:\n  {}\n{}".format(
+            shlex.join([str(c) for c in cmd] + ["--version"]), (proc.stderr or proc.stdout).strip()[:500]))
     return cmd
 
 def build_screen_resubmit_cmd(args, pipeline='bindcraft'):
     """
-    Reconstruct the exact ``screen`` command, including path and arguments
+    Reconstruct the exact screen command, including path and arguments
     so each self-resubmission behaves identically to the first.
     """
     launcher = verify_launcher(find_wrapper_executable())
@@ -87,6 +85,14 @@ def build_screen_resubmit_cmd(args, pipeline='bindcraft'):
                 "--slurm-bc", str(args.slurm_bc),
                 "--filters", str(args.filters),
                 "--advanced", str(args.advanced),]
+    # reconstruct bindcraft2 screen command
+    if pipeline == "bindcraft2":
+        cmd = launcher + ["screen", "bindcraft2",
+                "--inputs", str(args.inputs),
+                "--bindcraft2", str(args.bindcraft2),
+                "--slurm-bc2", str(args.slurm_bc2),]
+        if getattr(args, "af2_params", None):
+            cmd += ["--af2-params", str(args.af2_params)]
     # reconstruct boltzgen screen command
     if pipeline == "boltzgen":
         cmd = launcher + ["screen", "boltzgen",
@@ -143,6 +149,18 @@ def add_bindcraft_defaults(args):
         args.advanced = bc / "settings_advanced" / "default_4stage_multimer.json"
     return args
 
+def add_bindcraft2_defaults(args):
+    """
+    add path for default BindCraft2 slurm script. Cannot be included from the
+    start in argparse since the bindcraft2 path must be specified first.
+    Unlike BindCraft1, BindCraft2 has no separate filters/advanced settings.
+    everything is specified in the input .json.
+    """
+    bc2 = Path(args.bindcraft2)
+    if getattr(args, "slurm_bc2", None) is None:
+        args.slurm_bc2 = bc2 / "bindcraft.slurm"
+    return args
+
 def add_boltzgen_defaults(args):
     """
     generate default boltzgen files if neccesary. 
@@ -172,20 +190,8 @@ def add_boltzgen_defaults(args):
 
 def check_foundry_env(spec):
     """
-    Fail before anything is submitted if ``--foundry`` does not name an
-    environment that has foundry in it.
-
-    A screen submits jobs for days without anyone watching, and a wrong
-    environment only shows up as every job failing at its first command, so the
-    flag is checked while there is still someone at the terminal -- the same
-    reason ``verify_launcher`` checks the resubmit launcher here.
-
-    Only a value naming a directory can be checked at all, and only a value that
-    is *nothing but* a path is checked fatally. A command is the caller telling
-    the compute node's shell what to do, and it may well make the environment
-    appear -- ``module load ... && source .../activate`` on a node-local path is
-    a normal thing to write -- so a command that looks wrong from here is
-    reported and then trusted, exactly as it was before it was ever inspected.
+    Check the environment specified in the --foundry flag. 
+    Fail before anything is submitted
     """
     from .util import env_root, find_executable_in_env, is_env_path
     root = env_root(spec)
@@ -268,7 +274,7 @@ def cmd_hotspots(args):
 
 def cmd_screen_bc(args):
     """
-    Run the slum screen command with the arguments provided in ``args``
+    Run the BindCraft slum screen command with the arguments provided in args
     """
     # run the run_screen function to analyze outputs and (re)run slurm jobs
     from .bindcraft_slurm import run_screen
@@ -282,10 +288,24 @@ def cmd_screen_bc(args):
         controller_cpus=args.controller_cpus,)
     return 0
 
+def cmd_screen_bc2(args):
+    """
+    Run the BindCraft2 slum screen command with the arguments provided in args
+    """
+    from .bindcraft2_slurm import run_screen
+    args = add_bindcraft2_defaults(args)
+    resubmit_cmd = build_screen_resubmit_cmd(args, pipeline='bindcraft2')
+    run_screen(
+        inputs_file=args.inputs, slurm_bc2=args.slurm_bc2, bindcraft2_dir=args.bindcraft2,
+        resubmit_cmd=resubmit_cmd, af2_params=args.af2_params,
+        min_ratio=args.min_ratio, min_traj=args.min_traj, nr_jobs=args.nr_jobs,
+        controller_time=args.controller_time, controller_mem=args.controller_mem,
+        controller_cpus=args.controller_cpus,)
+    return 0
+
 def cmd_screen_bg(args):
     """
-    Run the slum screen command for boltzgen 
-    with the arguments provided in args
+    Run the boltzgen slum screen command with the arguments provided in args
     """
     # run the run_screen function to analyze outputs and (re)run slurm jobs
     from .boltzgen_slurm import run_screen
@@ -301,8 +321,7 @@ def cmd_screen_bg(args):
 
 def cmd_screen_rfd3(args):
     """
-    Run the slum screen command for RFdiffusion 3 + mpnn + RF3 
-    with the arguments provided in args
+    Run the RFdiffusion 3 screen command with the arguments provided in args  
     """
     # run the run_screen function to analyze outputs and (re)run slurm jobs
     from .rfd3_slurm import run_screen
@@ -425,6 +444,9 @@ def cmd_fuse(args):
 
 
 def cmd_linker(args):
+    """
+    calculate the required linker length from the command line
+    """
     from .linker import compute_linker, residues_for_length
 
     length, _ = compute_linker(
@@ -472,12 +494,16 @@ def cmd_patch_bindcraft(args):
     from .bindcraft_patch import patch_bindcraft
     print("Patching BindCraft install at {}".format(args.bindcraft))
     try:
-        result = patch_bindcraft(args.bindcraft)
-    except (FileNotFoundError, RuntimeError) as exc:
+        result = patch_bindcraft(args.bindcraft, backend=args.backend)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print("Error: {}".format(exc), file=sys.stderr)
         return 1
+    print("  backend: {}".format(result["backend"]))
     if not result["colabdesign_utils_patched"] and not result["json_files_updated"]:
         print("Already up to date; nothing to change.")
+    elif result["backend"] == "bindcraft2":
+        print("Done: bindcraft/loss.py {}.".format(
+            "patched" if result["colabdesign_utils_patched"] else "unchanged"))
     else:
         print("Done: BindCraft functions {}, {} settings_advanced json file(s) updated.".format(
             "patched" if result["colabdesign_utils_patched"] else "unchanged",
@@ -542,7 +568,7 @@ def add_hotspot_args(p, with_pipeline=True):
     # disable if arguments are folded into the whole pipeline to prevent argument clashes
     if with_pipeline:
         p.add_argument("--pipeline", type=str, default="bindcraft",
-                       choices=["bindcraft", "boltzgen", "rfd3"],
+                       choices=["bindcraft", "bindcraft2", "boltzgen", "rfd3"],
                        help="Pipeline for which the files and hotspots will be generated. (default: bindcraft)")
     p.add_argument("--chain", type=str, default=None,
                    help="Restrict scoring to this chain/segid.")
@@ -595,6 +621,16 @@ def add_screen_bc_args(p, require_inputs=True, require_bindcraft=True):
     p.add_argument("--advanced", type=Path, default=None,
                    help="Advanced settings JSON (default: <bindcraft>/settings_advanced/default_4stage_multimer.json).")
 
+def add_screen_bc2_args(p, require_inputs=True, require_bindcraft2=True):
+    p.add_argument("--inputs", type=Path, required=require_inputs,
+                   help="Text file with one path to an input campaign JSON per line.")
+    p.add_argument("--bindcraft2", required=require_bindcraft2, type=Path, default=None,
+                   help="Path to the BindCraft2 install directory (used to derive defaults).")
+    p.add_argument("--slurm-bc2", type=Path, default=None,
+                   help="BindCraft2 SLURM script (default: <bindcraft2>/bindcraft.slurm).")
+    p.add_argument("--af2-params", type=Path, default=None,
+                   help="optional directory holding model parameters")
+
 def add_screen_bg_args(p, with_outdir=True, require_inputs=True, require_boltzgen=True):
     p.add_argument("--inputs", type=Path, required=require_inputs,
                    help="Text file with one path to an input YAML file per line.")
@@ -610,8 +646,8 @@ def add_screen_bg_args(p, with_outdir=True, require_inputs=True, require_boltzge
                    help="BoltzGen protocol. only specify if no template slurm is provided (default: protein-anything)")
     p.add_argument("--num-designs", type=int, default=10000,
                    help="Number of total BoltzGen designs. only specify if no template slurm is provided (default: 10000)")
-    p.add_argument("--budget", type=int, default=300,
-                   help="Number of final BoltzGen designs. only specify if no template slurm is provided (default: 300)")
+    p.add_argument("--budget", type=int, default=100,
+                   help="Number of final BoltzGen designs. only specify if no template slurm is provided (default: 100)")
 
 def add_screen_rfd3_args(p, with_outdir=True, require_inputs=True, require_foundry=True):
     p.add_argument("--inputs", type=Path, required=require_inputs,
@@ -628,15 +664,15 @@ def add_screen_rfd3_args(p, with_outdir=True, require_inputs=True, require_found
                        help="Output directory if none provided, input directory is used")
     p.add_argument("--slurm-rfd3", type=Path, default=None,
                    help="RFdiffusion3 SLURM script. If none is provided, a default one will be generated")
-    p.add_argument("--budget", type=int, default=300,
-                   help="Number of final designs that count as finished (default: 300).")
-    p.add_argument("--num-designs", type=int, default=4,
-                   help="Backbones diffused per job (default: 4).")
+    p.add_argument("--budget", type=int, default=100,
+                   help="Number of final designs that count as finished (default: 100).")
+    p.add_argument("--num-designs", type=int, default=8,
+                   help="Backbones diffused per job (default: 8).")
     p.add_argument("--batch-size", type=int, default=4,
                    help="Designs per diffusion batch; one batch shares one sampled "
                         "binder length (default: 4).")
-    p.add_argument("--mpnn-seqs", type=int, default=4,
-                   help="ProteinMPNN sequences designed per backbone (default: 4).")
+    p.add_argument("--mpnn-seqs", type=int, default=8,
+                   help="ProteinMPNN sequences designed per backbone (default: 8).")
     p.add_argument("--min-iptm", type=float, default=0.8,
                    help="Minimum RF3 ipTM for a design to pass (default: 0.8).")
     p.add_argument("--min-plddt", type=float, default=80.0,
@@ -677,7 +713,7 @@ def add_status_args(p):
     p.add_argument("--outdir", type=Path, default=None,
                    help="Pipeline output dir containing pipeline.json.")
     p.add_argument("--pipeline", type=str, default=None,
-                   choices=["bindcraft", "boltzgen", "rfd3"],
+                   choices=["bindcraft", "bindcraft2", "boltzgen", "rfd3"],
                    help="Backend that ran the screen (default: from pipeline.json).")
     p.add_argument("--screen-outdir", type=Path, default=None,
                    help="Root the screen wrote into. BoltzGen and RFdiffusion3 "
@@ -783,6 +819,11 @@ def build_parser():
     add_screen_bc_args(p_bc, require_inputs=True)
     add_screen_c_args(p_bc)
     p_bc.set_defaults(func=cmd_screen_bc)
+    # create resubmission pipeline for bindcraft2
+    p_bc2 = subsub.add_parser("bindcraft2", help="Run/continue BindCraft2 SLURM screen.")
+    add_screen_bc2_args(p_bc2, require_inputs=True)
+    add_screen_c_args(p_bc2)
+    p_bc2.set_defaults(func=cmd_screen_bc2)
     # create resubmission pipeline for boltzgen
     p_bg = subsub.add_parser("boltzgen", help="Run/continue BoltzGen SLURM screen.")
     add_screen_bg_args(p_bg, require_inputs=True, require_boltzgen=True)
@@ -821,11 +862,14 @@ def build_parser():
                        help="Add the target-binder termini distance loss (both fusion orders) to a BindCraft install.")
     p.add_argument("--bindcraft", required=True, type=Path,
                    help="Path to the BindCraft installation to patch.")
+    p.add_argument("--backend", choices=["bindcraft", "bindcraft2"], default=None,
+                   help="Which BindCraft this install is (default: guessed from its directory layout).")
     p.set_defaults(func=cmd_patch_bindcraft)
     # the whole pipeline
     p = sub.add_parser("run", help="Run the whole pipeline: hotspots -> screen.")
     runsub = p.add_subparsers(dest="backend", required=True)
     for name, adder in (("bindcraft", add_screen_bc_args),
+                        ("bindcraft2", add_screen_bc2_args),
                         ("boltzgen", add_screen_bg_args),
                         ("rfd3", add_screen_rfd3_args)):
         p_run = runsub.add_parser(name, help="hotspots -> {} screen.".format(name))
@@ -834,6 +878,8 @@ def build_parser():
         # needed with --auto, so neither is required up front
         if name == "bindcraft":
             adder(p_run, require_inputs=False, require_bindcraft=False)
+        elif name == "bindcraft2":
+            adder(p_run, require_inputs=False, require_bindcraft2=False)
         elif name == "boltzgen":
             adder(p_run, with_outdir=False, require_inputs=False, require_boltzgen=False)
         else:

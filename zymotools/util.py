@@ -1,8 +1,9 @@
 """
-Various utility functions, mainly for managing the various environments and backends. 
+Various utility functions, mainly for managing the various environments and backends.
 """
 
 from pathlib import Path
+import json
 import os
 import shlex
 import shutil
@@ -227,3 +228,48 @@ def activation_command(spec):
         return "conda activate {}".format(shlex.quote(str(root)))
     # nothing to source: PATH is all the console scripts actually need
     return 'export PATH={}:"$PATH"'.format(shlex.quote(str(bin_dir)))
+
+
+# --------------------------------------------------------------------------
+# resubmission-loop check, shared by every backend
+# --------------------------------------------------------------------------
+
+# max nr of cycles of failed job sumbissions before breaking the screen loop
+MAX_STALL_CYCLES = 3
+STALL_STATE_FILENAME = ".screen_stall.json"
+
+
+def stall_state_path(output_path):
+    return Path(output_path) / STALL_STATE_FILENAME
+
+
+def _load_stall_state(output_path):
+    path = stall_state_path(output_path)
+    if path.is_file():
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"last_traj": None, "stall_count": 0}
+
+
+def _save_stall_state(output_path, state):
+    path = stall_state_path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state))
+
+
+def check_stalled(output_path, traj_nr, max_stall_cycles=MAX_STALL_CYCLES):
+    """
+    Track trajectory count across controller cycles for one input. 
+    return true if traj_nr does not grow for more than max_stall_cycles
+    save the updated state as a side effect.
+    """
+    state = _load_stall_state(output_path)
+    if state["last_traj"] is not None and traj_nr <= state["last_traj"]:
+        state["stall_count"] += 1
+    else:
+        state["stall_count"] = 0
+    state["last_traj"] = traj_nr
+    _save_stall_state(output_path, state)
+    return state["stall_count"] >= max_stall_cycles

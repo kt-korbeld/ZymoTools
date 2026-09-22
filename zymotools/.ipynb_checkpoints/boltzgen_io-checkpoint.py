@@ -57,7 +57,7 @@ def default_settings(base_name, struc, design_root=".", chain="A"):
     """
     A minimal BoltzGen settings dict for a structure.
     """
-    template = {'entities': [{'protein': {'id': 'B', 'sequence': '80..140'}},
+    template = {'entities': [{'protein': {'id': 'B', 'sequence': '60..100'}},
                 {'file': {'path': str(struc),
                  'include': [{'chain': {'id': chain}}],
                  'binding_types': [{'chain': {'id': chain, 'binding': ''}}],
